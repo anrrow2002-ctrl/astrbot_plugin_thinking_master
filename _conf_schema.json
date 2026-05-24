@@ -1,0 +1,35 @@
+{
+  "enable_inject": {
+    "description": "启用思维链注入",
+    "type": "bool",
+    "default": true
+  },
+  "native_block_prompt": {
+    "description": "卡掉模型原生思维链",
+    "type": "string",
+    "hint": "禁止模型用自己的 reasoning，强制只走你写的 <thinking>。留空使用内置默认",
+    "default": ""
+  },
+  "online_prompt": {
+    "description": "线上模式 Prompt",
+    "type": "string",
+    "hint": "聊天场景的思维链。留空使用内置默认",
+    "default": ""
+  },
+  "offline_prompt": {
+    "description": "线下模式 Prompt",
+    "type": "string",
+    "hint": "见面/RP场景的思维链。留空使用内置默认",
+    "default": ""
+  },
+  "default_mode": {
+    "description": "默认启动模式 (online / offline)",
+    "type": "string",
+    "default": "online"
+  },
+  "max_history": {
+    "description": "保留最近多少条思考记录",
+    "type": "int",
+    "default": 20
+  }
+}
