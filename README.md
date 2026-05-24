@@ -18,7 +18,10 @@ AstrBot WebUI → 插件管理 → 安装插件 → 填仓库地址：https://gi
 | 字段 | 说明 |
 |------|------|
 | `enable_inject` | 是否启用思维链注入 |
-| `cot_prompt` | 自定义思维链 prompt（留空则用内置默认） |
+| `native_block_prompt` | 卡掉模型原生思维链。禁止模型用自己的 reasoning，强制只走你写的 `<thinking>`。留空使用内置默认 |
+| `online_prompt` | 线上模式 Prompt，适用于聊天场景的思维链。留空使用内置默认 |
+| `offline_prompt` | 线下模式 Prompt，适用于见面/RP 场景的思维链。留空使用内置默认 |
+| `default_mode` | 默认启动模式 (`online` / `offline`) |
 | `max_history` | 保留最近多少条思考记录 |
 
 ## 🎮 指令
