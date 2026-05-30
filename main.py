@@ -1,13 +1,11 @@
 import re
 import json
 import os
-import asyncio
 from datetime import datetime
 from astrbot.api.star import Star, Context, register
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.provider import ProviderRequest
 from astrbot.api import logger
-
 
 
 DEFAULT_COT_PROMPT = """[System Directive]: 
@@ -71,8 +69,6 @@ step 4: 【最后确认】
 然后给出小说体回复。"""
 
 
-
-
 @register(
     "astrbot_plugin_thinking_master",
     "张安若",
@@ -90,12 +86,10 @@ class ThinkingMaster(Star):
         self.online_prompt = online or DEFAULT_COT_PROMPT
         self.offline_prompt = offline or DEFAULT_OFFLINE_PROMPT
 
-        self.max_history = config.get("max_history", 200)
-        self.panel_port = int(config.get("panel_port", 7799))
+        self.max_history = config.get("max_history", 20)
 
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         self.history_file = os.path.join(plugin_dir, "thinking_history.json")
-        self.debug_log_file = os.path.join(plugin_dir, "thinking_debug.jsonl")
         self.mode_file = os.path.join(plugin_dir, "current_mode.txt")
 
         default_mode = config.get("default_mode", "online")
@@ -111,10 +105,6 @@ class ThinkingMaster(Star):
             re.compile(r"<thinking>(.*)$", re.S | re.I),
             re.compile(r"<think>(.*)$", re.S | re.I),
         ]
-
-        # 面板已禁用（Docker环境无端口映射）
-
-    # ── 持久化 ──
 
     def _load_mode(self, default):
         try:
@@ -135,22 +125,6 @@ class ThinkingMaster(Star):
             logger.warning(f"保存模式失败: {e}")
 
     def _load_history(self):
-        # 优先从 jsonl debug 日志加载（更完整）
-        records = []
-        try:
-            if os.path.exists(self.debug_log_file):
-                with open(self.debug_log_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            try:
-                                records.append(json.loads(line))
-                            except Exception:
-                                pass
-                return records[-self.max_history:]
-        except Exception:
-            pass
-        # 兜底读旧 json
         try:
             if os.path.exists(self.history_file):
                 with open(self.history_file, "r", encoding="utf-8") as f:
@@ -159,16 +133,7 @@ class ThinkingMaster(Star):
             pass
         return []
 
-    def _append_debug_log(self, entry: dict):
-        """追加一条到 jsonl，不重写整个文件"""
-        try:
-            with open(self.debug_log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception as e:
-            logger.warning(f"写debug日志失败: {e}")
-
     def _save_history(self):
-        # 兼容旧格式，也写一份 json
         try:
             with open(self.history_file, "w", encoding="utf-8") as f:
                 json.dump(self.history[-self.max_history:], f, ensure_ascii=False, indent=2)
@@ -178,48 +143,28 @@ class ThinkingMaster(Star):
     def _get_active_prompt(self):
         return self.offline_prompt if self.current_mode == "offline" else self.online_prompt
 
-
-    # ── 核心逻辑 ──
-
-    def _do_strip(self, text: str):
-        """剥离thinking标签，返回 (正文, thinking列表, is_repaired, is_fallback)"""
-        repaired_once = False
-        fallback_once = False
-        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
-            lo = open_tag.lower()
-            tl = text.lower()
-            open_pos = tl.find(lo)
-            if open_pos != -1 and tl.find(close_tag.lower(), open_pos) == -1:
-                content_start = open_pos + len(open_tag)
-                rest = text[content_start:]
-                split_pos = rest.find("\n\n")
-                if split_pos != -1 and split_pos < len(rest) - 1:
-                    thinking_part = text[:content_start + split_pos]
-                    body_part = rest[split_pos:].strip()
-                    text = thinking_part + "\n" + close_tag + "\n\n" + body_part
-                    logger.info(f"[thinking_master] 未闭合{open_tag}，双换行切割修复，正文保留{len(body_part)}字符")
-                else:
-                    text = text.rstrip() + "\n" + close_tag
-                    logger.warning(f"[thinking_master] 未闭合{open_tag}且无正文分隔，正文可能被吞！")
-                repaired_once = True
-                break
-
+    def _strip_tags(self, text: str):
+        """
+        剥离 thinking 标签，返回 (正文, thinking内容, 是否未闭合)
+        未闭合时：正文保持原样不空回，thinking内容仍记录
+        """
         thinking_texts = []
+        has_unclosed = False
+
+        # 先处理完整闭合的标签
         for p in self.closed_patterns:
             for match in p.findall(text):
-                content = match.strip()
-                if repaired_once:
-                    content += "  [自动补全闭合]"
-                thinking_texts.append(content)
+                thinking_texts.append(match.strip())
             text = p.sub("", text)
+
+        # 未闭合：只记录，不删正文
         for p in self.unclosed_patterns:
             m = p.search(text)
             if m:
-                thinking_texts.append(m.group(1).strip() + "  [未闭合-兜底]")
-                text = p.sub("", text)
-                fallback_once = True
+                thinking_texts.append(m.group(1).strip() + "  [未闭合]")
+                has_unclosed = True
 
-        return text.strip(), thinking_texts, repaired_once, fallback_once
+        return text.strip(), thinking_texts, has_unclosed
 
     @filter.on_llm_request()
     async def inject_cot(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -233,64 +178,39 @@ class ThinkingMaster(Star):
 
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
-        # ── 处理 Node（合并转发）类型 ──
-        if hasattr(resp, 'result_chain') and resp.result_chain:
-            # MessageChain 不可直接迭代，需访问 .chain 属性
-            chain_items = None
-            if hasattr(resp.result_chain, 'chain'):
-                chain_items = resp.result_chain.chain
-            elif hasattr(resp.result_chain, '__iter__'):
-                try:
-                    chain_items = list(resp.result_chain)
-                except TypeError:
-                    chain_items = None
-            if chain_items is not None:
-                for node in chain_items:
-                    if hasattr(node, 'text') and isinstance(node.text, str) and node.text:
-                        node.text, _, _, _ = self._do_strip(node.text)
-                return
+        sid = event.unified_msg_origin or "default"
+
+        # 优先取 reasoning_content（Gemini/DeepSeek 原生 thinking）
+        reasoning = ""
+        if hasattr(resp, "reasoning_content") and resp.reasoning_content:
+            reasoning = str(resp.reasoning_content).strip()
 
         raw_text = str(resp.completion_text or "")
-        reasoning_text = str(resp.reasoning_content or "") if hasattr(resp, "reasoning_content") else ""
+        text, thinking_texts, has_unclosed = self._strip_tags(raw_text)
 
-        # AstrBot 4.25+ 已原生分离 reasoning_content，只有 completion_text 里还混有标签才剥离
-        has_tag = any(tag in raw_text.lower() for tag in ["<thinking>", "<think>", "</thinking>", "</think>"])
-        if has_tag:
-            text, thinking_texts, is_repaired, is_fallback = self._do_strip(raw_text)
+        # 合并 reasoning_content 和标签内的 thinking
+        all_thinking = []
+        if reasoning:
+            all_thinking.append(f"[原生thinking]\n{reasoning}")
+        all_thinking.extend(thinking_texts)
+
+        # 未闭合时不替换正文，避免空回
+        if not has_unclosed:
             resp.completion_text = text
-        else:
-            text = raw_text
-            thinking_texts = [reasoning_text] if reasoning_text else []
-            is_repaired = False
-            is_fallback = False
 
-        is_empty = not text.strip() and bool(thinking_texts)
-        if is_empty:
-            logger.warning("[thinking_master] 正文为空！")
-
-        # ── 写 debug 日志 ──
-        sid = event.unified_msg_origin or "default"
-        entry = {
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "mode": self.current_mode,
-            "user": event.get_sender_name() or event.get_sender_id() or "unknown",
-            "user_message": self._last_user_msg.get(sid, ""),
-            "raw_output": raw_text[:800],
-            "body": text[:400],
-            "thinking": (reasoning_text or "\n\n".join(thinking_texts))[:600],
-            "is_empty": is_empty,
-            "is_repaired": is_repaired,
-            "is_fallback": is_fallback,
-        }
-
-        if thinking_texts or is_empty:
-            self._append_debug_log(entry)
+        # 只要有任何 thinking 内容就记录
+        if all_thinking:
+            entry = {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "mode": self.current_mode,
+                "user": event.get_sender_name() or event.get_sender_id() or "unknown",
+                "user_message": self._last_user_msg.get(sid, ""),
+                "thinking": "\n\n".join(all_thinking),
+            }
             self.history.append(entry)
             self.history = self.history[-self.max_history:]
             self._save_history()
-            logger.info(f"[思考已记录][{self.current_mode}] {entry['time']} empty={is_empty} repaired={is_repaired}")
-
-    # ── 指令 ──
+            logger.info(f"[思考已记录][{self.current_mode}] {entry['time']} unclosed={has_unclosed}")
 
     @filter.command("线下模式")
     async def cmd_offline(self, event: AstrMessageEvent):
@@ -324,13 +244,10 @@ class ThinkingMaster(Star):
             yield event.plain_result("暂无思考记录")
             return
         lines = [
-            f"{i}. [{e.get('mode','?')}] {e['time']}"
-            f"{'🔴' if e.get('is_empty') else '🟢'}"
-            f"{'🔧' if e.get('is_repaired') else ''}"
-            f" {e.get('user_message','')[:25]}"
+            f"{i}. [{e.get('mode','?')}] {e['time']} - {e.get('user_message','')[:25]}"
             for i, e in enumerate(self.history[-10:][::-1], 1)
         ]
-        yield event.plain_result("📋 最近10条 (🔴空回 🔧修复):\n" + "\n".join(lines))
+        yield event.plain_result("📋 最近10次思考:\n" + "\n".join(lines))
 
     @filter.command("清空思考")
     async def cmd_clear(self, event: AstrMessageEvent):
@@ -339,8 +256,4 @@ class ThinkingMaster(Star):
             return
         self.history = []
         self._save_history()
-        try:
-            open(self.debug_log_file, "w").close()
-        except Exception:
-            pass
         yield event.plain_result("✅ 已清空")
