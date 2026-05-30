@@ -25,11 +25,5 @@
     "description": "保留最近多少条思考记录",
     "type": "int",
     "default": 200
-  },
-  "panel_port": {
-    "description": "Web 日志面板端口",
-    "type": "int",
-    "hint": "浏览器访问 http://你的VPS_IP:端口 即可查看日志面板。确保防火墙开放此端口。",
-    "default": 7799
   }
 }
