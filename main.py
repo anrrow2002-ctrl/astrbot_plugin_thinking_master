@@ -468,10 +468,20 @@ class ThinkingMaster(Star):
     async def strip_cot(self, event: AstrMessageEvent, resp):
         # ── 处理 Node（合并转发）类型 ──
         if hasattr(resp, 'result_chain') and resp.result_chain:
-            for node in resp.result_chain:
-                if hasattr(node, 'text') and isinstance(node.text, str) and node.text:
-                    node.text, _, _, _ = self._do_strip(node.text)
-            return
+            # MessageChain 不可直接迭代，需访问 .chain 属性
+            chain_items = None
+            if hasattr(resp.result_chain, 'chain'):
+                chain_items = resp.result_chain.chain
+            elif hasattr(resp.result_chain, '__iter__'):
+                try:
+                    chain_items = list(resp.result_chain)
+                except TypeError:
+                    chain_items = None
+            if chain_items is not None:
+                for node in chain_items:
+                    if hasattr(node, 'text') and isinstance(node.text, str) and node.text:
+                        node.text, _, _, _ = self._do_strip(node.text)
+                return
 
         raw_text = str(resp.completion_text or "")
         logger.debug(f"[thinking_master] 原始输出(前200): {repr(raw_text[:200])}")
