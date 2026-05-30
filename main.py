@@ -8,11 +8,6 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.provider import ProviderRequest
 from astrbot.api import logger
 
-try:
-    from aiohttp import web as aiohttp_web
-    HAS_AIOHTTP = True
-except ImportError:
-    HAS_AIOHTTP = False
 
 
 DEFAULT_COT_PROMPT = """[System Directive]: 
@@ -21,7 +16,7 @@ step 0: 【前置规则】
  - 角色是有缺陷的普通人。行为受性格、环境、利益与后果约束。
  - 反神圣化、反过度升华、反消解、行为必有后果、语气具体化。
  step1【角色定位】 
-- 性别、关系定位、核心性格、长期动机、长期动机？ 
+- 性别、关系定位、核心性格、长期动机？ 
 - 当前主动矛盾与防御机制？ 
 - 人性裂缝、口癖、说话方式？ 
 step2 【记忆调取】 
@@ -76,195 +71,6 @@ step 4: 【最后确认】
 然后给出小说体回复。"""
 
 
-PANEL_HTML = """<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ThinkingMaster 日志面板</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f13; color: #e0e0e0; min-height: 100vh; }
-  header { background: #1a1a24; border-bottom: 1px solid #2a2a3a; padding: 16px 24px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
-  header h1 { font-size: 16px; font-weight: 600; color: #c9a6ff; }
-  .badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; font-weight: 500; }
-  .badge-online { background: #1a3a2a; color: #4ade80; }
-  .badge-offline { background: #1a2a3a; color: #60a5fa; }
-  .badge-err { background: #3a1a1a; color: #f87171; }
-  .toolbar { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
-  .toolbar input, .toolbar select { background: #2a2a3a; border: 1px solid #3a3a4a; color: #e0e0e0; padding: 5px 10px; border-radius: 6px; font-size: 13px; outline: none; }
-  .toolbar input:focus, .toolbar select:focus { border-color: #c9a6ff; }
-  .btn { background: #2a2a3a; border: 1px solid #3a3a4a; color: #e0e0e0; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .btn:hover { background: #3a3a4a; }
-  .btn-danger { border-color: #f87171; color: #f87171; }
-  .btn-danger:hover { background: #3a1a1a; }
-  main { padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
-  .stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-  .stat { background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 8px; padding: 12px 18px; min-width: 120px; }
-  .stat-val { font-size: 24px; font-weight: 700; color: #c9a6ff; }
-  .stat-label { font-size: 11px; color: #666; margin-top: 2px; }
-  .log-list { display: flex; flex-direction: column; gap: 10px; }
-  .log-card { background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 10px; overflow: hidden; transition: border-color 0.15s; }
-  .log-card:hover { border-color: #4a4a6a; }
-  .log-card.is-empty { border-color: #3a2020; }
-  .log-card.is-repaired { border-color: #2a3020; }
-  .log-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
-  .log-head:hover { background: #22223a; }
-  .log-time { font-size: 12px; color: #888; font-family: monospace; }
-  .log-user { font-size: 12px; color: #a0a0c0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .log-msg { font-size: 12px; color: #c0c0e0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { font-size: 10px; padding: 1px 6px; border-radius: 99px; font-weight: 500; }
-  .tag-empty { background: #3a1a1a; color: #f87171; }
-  .tag-repaired { background: #1a3a1a; color: #4ade80; }
-  .tag-fallback { background: #3a2a1a; color: #fb923c; }
-  .log-body { display: none; border-top: 1px solid #2a2a3a; }
-  .log-body.open { display: block; }
-  .log-section { padding: 12px 14px; border-bottom: 1px solid #1e1e2e; }
-  .log-section:last-child { border-bottom: none; }
-  .sec-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-  .sec-content { font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
-  .sec-content.raw { font-family: monospace; font-size: 12px; color: #aaa; }
-  .empty-state { text-align: center; padding: 60px; color: #444; }
-  #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #4ade80; color: #000; padding: 8px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
-</style>
-</head>
-<body>
-<header>
-  <h1>🧠 ThinkingMaster 日志面板</h1>
-  <div class="toolbar">
-    <input type="text" id="search" placeholder="搜索用户/消息..." oninput="render()">
-    <select id="filter-mode" onchange="render()">
-      <option value="">全部模式</option>
-      <option value="online">线上</option>
-      <option value="offline">线下</option>
-    </select>
-    <select id="filter-status" onchange="render()">
-      <option value="">全部状态</option>
-      <option value="empty">空回</option>
-      <option value="repaired">已修复</option>
-      <option value="fallback">兜底</option>
-    </select>
-    <button class="btn" onclick="loadLogs()">🔄 刷新</button>
-    <button class="btn btn-danger" onclick="clearLogs()">🗑 清空</button>
-  </div>
-</header>
-<main>
-  <div class="stats" id="stats"></div>
-  <div class="log-list" id="list"></div>
-</main>
-<div id="toast"></div>
-
-<script>
-let logs = [];
-
-async function loadLogs() {
-  try {
-    const r = await fetch('/thinking_logs');
-    logs = await r.json();
-    render();
-  } catch(e) {
-    document.getElementById('list').innerHTML = '<div class="empty-state">加载失败：' + e + '</div>';
-  }
-}
-
-function render() {
-  const search = document.getElementById('search').value.toLowerCase();
-  const modeF = document.getElementById('filter-mode').value;
-  const statusF = document.getElementById('filter-status').value;
-
-  let filtered = [...logs].reverse().filter(l => {
-    if (modeF && l.mode !== modeF) return false;
-    if (statusF === 'empty' && !l.is_empty) return false;
-    if (statusF === 'repaired' && !l.is_repaired) return false;
-    if (statusF === 'fallback' && !l.is_fallback) return false;
-    if (search && !(l.user||'').toLowerCase().includes(search) && !(l.user_message||'').toLowerCase().includes(search)) return false;
-    return true;
-  });
-
-  const stats = document.getElementById('stats');
-  const total = logs.length;
-  const empty = logs.filter(l => l.is_empty).length;
-  const repaired = logs.filter(l => l.is_repaired).length;
-  stats.innerHTML = `
-    <div class="stat"><div class="stat-val">${total}</div><div class="stat-label">总记录</div></div>
-    <div class="stat"><div class="stat-val" style="color:#f87171">${empty}</div><div class="stat-label">空回次数</div></div>
-    <div class="stat"><div class="stat-val" style="color:#4ade80">${repaired}</div><div class="stat-label">自动修复</div></div>
-    <div class="stat"><div class="stat-val" style="color:#60a5fa">${filtered.length}</div><div class="stat-label">当前筛选</div></div>
-  `;
-
-  if (!filtered.length) {
-    document.getElementById('list').innerHTML = '<div class="empty-state">没有符合条件的记录</div>';
-    return;
-  }
-
-  document.getElementById('list').innerHTML = filtered.map((l, i) => {
-    const tags = [
-      l.is_empty ? '<span class="tag tag-empty">空回</span>' : '',
-      l.is_repaired ? '<span class="tag tag-repaired">已修复</span>' : '',
-      l.is_fallback ? '<span class="tag tag-fallback">兜底</span>' : '',
-    ].join('');
-    const modeClass = l.mode === 'online' ? 'badge-online' : 'badge-offline';
-    const raw_preview = (l.raw_output || '').substring(0, 80).replace(/</g,'&lt;');
-    return `
-    <div class="log-card ${l.is_empty ? 'is-empty' : ''} ${l.is_repaired ? 'is-repaired' : ''}">
-      <div class="log-head" onclick="toggle(${i})">
-        <span class="badge ${modeClass}">${l.mode || '?'}</span>
-        <span class="log-time">${l.time}</span>
-        <span class="log-user">${l.user || '?'}</span>
-        <span class="log-msg">${(l.user_message || '').substring(0,40)}</span>
-        ${tags}
-      </div>
-      <div class="log-body" id="body-${i}">
-        <div class="log-section">
-          <div class="sec-label">用户消息</div>
-          <div class="sec-content">${escHtml(l.user_message || '—')}</div>
-        </div>
-        <div class="log-section">
-          <div class="sec-label">原始输出（前300字）</div>
-          <div class="sec-content raw">${escHtml((l.raw_output||'').substring(0,300))}</div>
-        </div>
-        <div class="log-section">
-          <div class="sec-label">提取正文</div>
-          <div class="sec-content">${escHtml(l.body || '（空）')}</div>
-        </div>
-        <div class="log-section">
-          <div class="sec-label">thinking内容</div>
-          <div class="sec-content raw">${escHtml((l.thinking||'').substring(0,500))}</div>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function toggle(i) {
-  const el = document.getElementById('body-' + i);
-  el.classList.toggle('open');
-}
-
-function escHtml(s) {
-  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-async function clearLogs() {
-  if (!confirm('确认清空所有日志？')) return;
-  await fetch('/thinking_logs', { method: 'DELETE' });
-  logs = [];
-  render();
-  showToast('已清空');
-}
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.opacity = 1;
-  setTimeout(() => t.style.opacity = 0, 2000);
-}
-
-loadLogs();
-setInterval(loadLogs, 30000);
-</script>
-</body>
-</html>"""
 
 
 @register(
@@ -299,11 +105,11 @@ class ThinkingMaster(Star):
 
         self.closed_patterns = [
             re.compile(r"<thinking>(.*?)</thinking>", re.S | re.I),
-            re.compile(r"(.*?)", re.S | re.I),
+            re.compile(r"<think>(.*?)</think>", re.S | re.I),
         ]
         self.unclosed_patterns = [
             re.compile(r"<thinking>(.*)$", re.S | re.I),
-            re.compile(r"(.*)$", re.S | re.I),
+            re.compile(r"<think>(.*)$", re.S | re.I),
         ]
 
         # 面板已禁用（Docker环境无端口映射）
@@ -372,41 +178,6 @@ class ThinkingMaster(Star):
     def _get_active_prompt(self):
         return self.offline_prompt if self.current_mode == "offline" else self.online_prompt
 
-    # ── Web 面板 ──
-
-    async def _start_panel(self):
-        app = aiohttp_web.Application()
-        app.router.add_get("/", self._panel_index)
-        app.router.add_get("/thinking_logs", self._api_logs)
-        app.router.add_delete("/thinking_logs", self._api_clear)
-        runner = aiohttp_web.AppRunner(app)
-        await runner.setup()
-        site = aiohttp_web.TCPSite(runner, "0.0.0.0", self.panel_port)
-        try:
-            await site.start()
-            logger.info(f"[thinking_master] Web面板已启动: http://0.0.0.0:{self.panel_port}")
-        except Exception as e:
-            logger.warning(f"[thinking_master] Web面板启动失败: {e}")
-
-    async def _panel_index(self, request):
-        return aiohttp_web.Response(text=PANEL_HTML, content_type="text/html", charset="utf-8")
-
-    async def _api_logs(self, request):
-        logs = self._load_history()
-        return aiohttp_web.Response(
-            text=json.dumps(logs, ensure_ascii=False),
-            content_type="application/json",
-            charset="utf-8"
-        )
-
-    async def _api_clear(self, request):
-        self.history = []
-        try:
-            open(self.debug_log_file, "w").close()
-            open(self.history_file, "w").write("[]")
-        except Exception:
-            pass
-        return aiohttp_web.Response(text='{"ok":true}', content_type="application/json")
 
     # ── 核心逻辑 ──
 
@@ -414,7 +185,7 @@ class ThinkingMaster(Star):
         """剥离thinking标签，返回 (正文, thinking列表, is_repaired, is_fallback)"""
         repaired_once = False
         fallback_once = False
-        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("", "")]:
+        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
             lo = open_tag.lower()
             tl = text.lower()
             open_pos = tl.find(lo)
@@ -462,9 +233,6 @@ class ThinkingMaster(Star):
 
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
-        logger.info(f"[thinking_master] strip_cot触发, resp类型: {type(resp)}, resp属性: {dir(resp)}")
-        logger.info(f"[thinking_master] completion_text前100: {repr(str(resp.completion_text or '')[:100])}")
-        logger.info(f"[thinking_master] reasoning_content前100: {repr(str(resp.reasoning_content or '')[:100])}")
         # ── 处理 Node（合并转发）类型 ──
         if hasattr(resp, 'result_chain') and resp.result_chain:
             # MessageChain 不可直接迭代，需访问 .chain 属性
@@ -483,15 +251,22 @@ class ThinkingMaster(Star):
                 return
 
         raw_text = str(resp.completion_text or "")
-        logger.debug(f"[thinking_master] 原始输出(前200): {repr(raw_text[:200])}")
+        reasoning_text = str(resp.reasoning_content or "") if hasattr(resp, "reasoning_content") else ""
 
-        text, thinking_texts, is_repaired, is_fallback = self._do_strip(raw_text)
-        is_empty = not text and bool(thinking_texts)
+        # AstrBot 4.25+ 已原生分离 reasoning_content，只有 completion_text 里还混有标签才剥离
+        has_tag = any(tag in raw_text.lower() for tag in ["<thinking>", "<think>", "</thinking>", "</think>"])
+        if has_tag:
+            text, thinking_texts, is_repaired, is_fallback = self._do_strip(raw_text)
+            resp.completion_text = text
+        else:
+            text = raw_text
+            thinking_texts = [reasoning_text] if reasoning_text else []
+            is_repaired = False
+            is_fallback = False
 
+        is_empty = not text.strip() and bool(thinking_texts)
         if is_empty:
-            logger.warning("[thinking_master] 正文为空！疑似thinking吞噬")
-
-        resp.completion_text = text
+            logger.warning("[thinking_master] 正文为空！")
 
         # ── 写 debug 日志 ──
         sid = event.unified_msg_origin or "default"
@@ -500,9 +275,9 @@ class ThinkingMaster(Star):
             "mode": self.current_mode,
             "user": event.get_sender_name() or event.get_sender_id() or "unknown",
             "user_message": self._last_user_msg.get(sid, ""),
-            "raw_output": raw_text[:800],          # 原始输出前800字
-            "body": text[:400],                    # 提取出的正文
-            "thinking": "\n\n".join(thinking_texts)[:600] if thinking_texts else "",
+            "raw_output": raw_text[:800],
+            "body": text[:400],
+            "thinking": (reasoning_text or "\n\n".join(thinking_texts))[:600],
             "is_empty": is_empty,
             "is_repaired": is_repaired,
             "is_fallback": is_fallback,
