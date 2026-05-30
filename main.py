@@ -299,11 +299,11 @@ class ThinkingMaster(Star):
 
         self.closed_patterns = [
             re.compile(r"<thinking>(.*?)</thinking>", re.S | re.I),
-            re.compile(r"<think>(.*?)</think>", re.S | re.I),
+            re.compile(r"(.*?)", re.S | re.I),
         ]
         self.unclosed_patterns = [
             re.compile(r"<thinking>(.*)$", re.S | re.I),
-            re.compile(r"<think>(.*)$", re.S | re.I),
+            re.compile(r"(.*)$", re.S | re.I),
         ]
 
         # 面板已禁用（Docker环境无端口映射）
@@ -414,7 +414,7 @@ class ThinkingMaster(Star):
         """剥离thinking标签，返回 (正文, thinking列表, is_repaired, is_fallback)"""
         repaired_once = False
         fallback_once = False
-        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
+        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("", "")]:
             lo = open_tag.lower()
             tl = text.lower()
             open_pos = tl.find(lo)
@@ -462,6 +462,7 @@ class ThinkingMaster(Star):
 
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
+        logger.info(f"[thinking_master] strip_cot触发, resp类型: {type(resp)}, resp属性: {dir(resp)}")
         # ── 处理 Node（合并转发）类型 ──
         if hasattr(resp, 'result_chain') and resp.result_chain:
             # MessageChain 不可直接迭代，需访问 .chain 属性
