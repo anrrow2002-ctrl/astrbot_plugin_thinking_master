@@ -306,11 +306,7 @@ class ThinkingMaster(Star):
             re.compile(r"<think>(.*)$", re.S | re.I),
         ]
 
-        # 启动 Web 面板
-        if HAS_AIOHTTP:
-            asyncio.get_event_loop().create_task(self._start_panel())
-        else:
-            logger.warning("[thinking_master] aiohttp 不可用，Web面板未启动")
+        # 面板已禁用（Docker环境无端口映射）
 
     # ── 持久化 ──
 
