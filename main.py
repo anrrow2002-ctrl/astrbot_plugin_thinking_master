@@ -21,7 +21,7 @@ step 0: 【前置规则】
  - 角色是有缺陷的普通人。行为受性格、环境、利益与后果约束。
  - 反神圣化、反过度升华、反消解、行为必有后果、语气具体化。
  step1【角色定位】 
-- 性别、关系定位、核心性格、长期动机？ 
+- 性别、关系定位、核心性格、长期动机、长期动机？ 
 - 当前主动矛盾与防御机制？ 
 - 人性裂缝、口癖、说话方式？ 
 step2 【记忆调取】 
@@ -113,7 +113,7 @@ PANEL_HTML = """<!DOCTYPE html>
   .log-time { font-size: 12px; color: #888; font-family: monospace; }
   .log-user { font-size: 12px; color: #a0a0c0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .log-msg { font-size: 12px; color: #c0c0e0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { font-size: 10px; padding: 1px 6px; border-radius: 99px; }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 99px; font-weight: 500; }
   .tag-empty { background: #3a1a1a; color: #f87171; }
   .tag-repaired { background: #1a3a1a; color: #4ade80; }
   .tag-fallback { background: #3a2a1a; color: #fb923c; }
@@ -463,6 +463,8 @@ class ThinkingMaster(Star):
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
         logger.info(f"[thinking_master] strip_cot触发, resp类型: {type(resp)}, resp属性: {dir(resp)}")
+        logger.info(f"[thinking_master] completion_text前100: {repr(str(resp.completion_text or '')[:100])}")
+        logger.info(f"[thinking_master] reasoning_content前100: {repr(str(resp.reasoning_content or '')[:100])}")
         # ── 处理 Node（合并转发）类型 ──
         if hasattr(resp, 'result_chain') and resp.result_chain:
             # MessageChain 不可直接迭代，需访问 .chain 属性
