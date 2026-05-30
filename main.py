@@ -179,17 +179,50 @@ class ThinkingMaster(Star):
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
         text = str(resp.completion_text or "")
+
+        # ── DEBUG：记录原始输出前200字符，方便排查空回问题 ──
+        logger.debug(f"[thinking_master] 原始输出(前200): {repr(text[:200])}")
+
+        repaired_once = False
+        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
+            lo = open_tag.lower()
+            tl = text.lower()
+            open_pos = tl.find(lo)
+            if open_pos != -1 and tl.find(close_tag.lower(), open_pos) == -1:
+                # 未闭合：尝试在双换行处切割，保留正文
+                content_start = open_pos + len(open_tag)
+                rest = text[content_start:]
+                split_pos = rest.find("\n\n")
+                if split_pos != -1 and split_pos < len(rest) - 1:
+                    thinking_part = text[:content_start + split_pos]
+                    body_part = rest[split_pos:].strip()
+                    text = thinking_part + "\n" + close_tag + "\n\n" + body_part
+                    logger.info(f"[thinking_master] 未闭合{open_tag}，双换行切割修复，正文保留{len(body_part)}字符")
+                else:
+                    text = text.rstrip() + "\n" + close_tag
+                    logger.warning(f"[thinking_master] 未闭合{open_tag}且无正文分隔，正文可能被吞！")
+                repaired_once = True
+                break
+
+        # ── 正常提取 thinking 内容并从回复中剥离 ──
         thinking_texts = []
         for p in self.closed_patterns:
             for match in p.findall(text):
-                thinking_texts.append(match.strip())
+                content = match.strip()
+                if repaired_once:
+                    content += "  [自动补全闭合]"
+                thinking_texts.append(content)
             text = p.sub("", text)
         for p in self.unclosed_patterns:
             m = p.search(text)
             if m:
-                thinking_texts.append(m.group(1).strip() + "  [未闭合]")
+                thinking_texts.append(m.group(1).strip() + "  [未闭合-兜底]")
                 text = p.sub("", text)
         text = text.strip()
+
+        # ── 正文为空时告警 ──
+        if not text and thinking_texts:
+            logger.warning(f"[thinking_master] 正文提取后为空！疑似整段被thinking吞噬，thinking长度={len(thinking_texts[0])}")
         resp.completion_text = text
         if thinking_texts:
             sid = event.unified_msg_origin or "default"
