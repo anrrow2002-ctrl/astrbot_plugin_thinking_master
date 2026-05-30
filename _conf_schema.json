@@ -4,12 +4,6 @@
     "type": "bool",
     "default": true
   },
-  "native_block_prompt": {
-    "description": "卡掉模型原生思维链",
-    "type": "string",
-    "hint": "禁止模型用自己的 reasoning，强制只走你写的 <thinking>。留空使用内置默认",
-    "default": ""
-  },
   "online_prompt": {
     "description": "线上模式 Prompt",
     "type": "string",
@@ -30,6 +24,12 @@
   "max_history": {
     "description": "保留最近多少条思考记录",
     "type": "int",
-    "default": 20
+    "default": 200
+  },
+  "panel_port": {
+    "description": "Web 日志面板端口",
+    "type": "int",
+    "hint": "浏览器访问 http://你的VPS_IP:端口 即可查看日志面板。确保防火墙开放此端口。",
+    "default": 7799
   }
 }
