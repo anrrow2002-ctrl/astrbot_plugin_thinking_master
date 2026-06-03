@@ -69,6 +69,24 @@ step 4: 【最后确认】
 然后给出小说体回复。"""
 
 
+DEFAULT_NATIVE_BLOCK = """[System Override]
+禁止输出或使用模型自身默认推理链。
+不要调用原生 reasoning。
+不要使用 hidden chain-of-thought。
+不要采用 provider 内建思考结构。
+
+只允许使用用户提供的 <thinking> 标签推演。
+
+推理必须全部写入：
+
+<thinking>
+...
+</thinking>
+
+除此之外禁止任何额外内部思考格式。
+"""
+
+
 @register(
     "astrbot_plugin_thinking_master",
     "张安若",
@@ -80,6 +98,9 @@ class ThinkingMaster(Star):
         super().__init__(context)
         config = config or {}
         self.enable_inject = config.get("enable_inject", True)
+
+        native = config.get("native_block_prompt", "").strip()
+        self.native_block_prompt = native or DEFAULT_NATIVE_BLOCK
 
         online = config.get("online_prompt", "").strip()
         offline = config.get("offline_prompt", "").strip()
@@ -145,19 +166,17 @@ class ThinkingMaster(Star):
 
     def _strip_tags(self, text: str):
         """
-        剥离 thinking 标签，返回 (正文, thinking内容, 是否未闭合)
+        剥离 thinking 标签，返回 (正文, thinking内容列表, 是否未闭合)
         未闭合时：正文保持原样不空回，thinking内容仍记录
         """
         thinking_texts = []
         has_unclosed = False
 
-        # 先处理完整闭合的标签
         for p in self.closed_patterns:
             for match in p.findall(text):
                 thinking_texts.append(match.strip())
             text = p.sub("", text)
 
-        # 未闭合：只记录，不删正文
         for p in self.unclosed_patterns:
             m = p.search(text)
             if m:
@@ -174,21 +193,23 @@ class ThinkingMaster(Star):
         self._last_user_msg[sid] = (event.message_str or "")[:100]
         existing = (req.system_prompt or "").strip()
         active = self._get_active_prompt()
-        req.system_prompt = (existing + "\n\n" + active).strip()
+        req.system_prompt = (
+            existing + "\n\n" + self.native_block_prompt + "\n\n" + active
+        ).strip()
 
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
         sid = event.unified_msg_origin or "default"
 
-        # 优先取 reasoning_content（Gemini/DeepSeek 原生 thinking）
+        # 捞出原生 reasoning_content 后立即清空，防止透传给用户
         reasoning = ""
         if hasattr(resp, "reasoning_content") and resp.reasoning_content:
             reasoning = str(resp.reasoning_content).strip()
+            resp.reasoning_content = ""
 
         raw_text = str(resp.completion_text or "")
         text, thinking_texts, has_unclosed = self._strip_tags(raw_text)
 
-        # 合并 reasoning_content 和标签内的 thinking
         all_thinking = []
         if reasoning:
             all_thinking.append(f"[原生thinking]\n{reasoning}")
@@ -198,7 +219,6 @@ class ThinkingMaster(Star):
         if not has_unclosed:
             resp.completion_text = text
 
-        # 只要有任何 thinking 内容就记录
         if all_thinking:
             entry = {
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

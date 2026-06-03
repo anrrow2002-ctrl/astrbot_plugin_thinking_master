@@ -4,6 +4,12 @@
     "type": "bool",
     "default": true
   },
+  "native_block_prompt": {
+    "description": "卡掉模型原生思维链",
+    "type": "string",
+    "hint": "禁止模型用自己的 reasoning，强制只走你写的 <thinking>。留空使用内置默认",
+    "default": ""
+  },
   "online_prompt": {
     "description": "线上模式 Prompt",
     "type": "string",
@@ -24,6 +30,6 @@
   "max_history": {
     "description": "保留最近多少条思考记录",
     "type": "int",
-    "default": 200
+    "default": 20
   }
 }
