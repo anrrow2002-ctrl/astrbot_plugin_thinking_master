@@ -70,20 +70,11 @@ step 4: 【最后确认】
 
 
 DEFAULT_NATIVE_BLOCK = """[System Override]
-禁止输出或使用模型自身默认推理链。
-不要调用原生 reasoning。
-不要使用 hidden chain-of-thought。
-不要采用 provider 内建思考结构。
+你的原生 reasoning 功能已在 API 层被禁用。
+禁止产生任何内置 hidden chain-of-thought。
 
-只允许使用用户提供的 <thinking> 标签推演。
-
-推理必须全部写入：
-
-<thinking>
-...
-</thinking>
-
-除此之外禁止任何额外内部思考格式。
+因此，你的唯一思考渠道是：将所有推理过程显式写入下方指定的 <thinking> 标签中。
+没有 <thinking> 标签 = 没有思考，直接禁止输出正文。
 """
 
 
