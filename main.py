@@ -196,6 +196,9 @@ class ThinkingMaster(Star):
         injected = (self.native_block_prompt + "\n\n" + active + "\n\n" + existing).strip()
         req.system_prompt = injected
 
+        if getattr(req, "prompt", None):
+            req.prompt += "\n[格式强制：先写...，再写正文，不可省略]"
+
         logger.info(f"[ThinkingMaster] ✅ 注入成功 | sid={sid} | mode={self.current_mode} | prompt长度={len(injected)}")
 
     @filter.on_llm_response()
