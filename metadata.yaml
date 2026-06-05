@@ -1,5 +1,5 @@
 repo: "https://github.com/anrrow2002-ctrl/astrbot_plugin_thinking_master"
-version: "0.5.3"
+version: "0.7.3"
 name: astrbot_plugin_thinking_master
 desc: "思维链注入+原生CoT屏蔽+双模式"
 author: "张安若"
