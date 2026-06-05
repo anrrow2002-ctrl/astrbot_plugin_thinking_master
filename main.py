@@ -82,30 +82,19 @@ DEFAULT_NATIVE_BLOCK = """[System Override]
     "astrbot_plugin_thinking_master",
     "张安若",
     "思维链注入+原生CoT屏蔽+双模式",
-    "0.5.0"
+    "0.6.0"
 )
 class ThinkingMaster(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
-        config = config or {}
-        self.enable_inject = config.get("enable_inject", True)
-
-        native = config.get("native_block_prompt", "").strip()
-        self.native_block_prompt = native or DEFAULT_NATIVE_BLOCK
-
-        online = config.get("online_prompt", "").strip()
-        offline = config.get("offline_prompt", "").strip()
-        self.online_prompt = online or DEFAULT_COT_PROMPT
-        self.offline_prompt = offline or DEFAULT_OFFLINE_PROMPT
-
-        self.max_history = config.get("max_history", 20)
+        self._raw_config = config or {}
+        self._apply_config(self._raw_config)
 
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         self.history_file = os.path.join(plugin_dir, "thinking_history.json")
         self.mode_file = os.path.join(plugin_dir, "current_mode.txt")
 
-        default_mode = config.get("default_mode", "online")
-        self.current_mode = self._load_mode(default_mode)
+        self.current_mode = self._load_mode(self._raw_config.get("default_mode", "online"))
         self.history = self._load_history()
         self._last_user_msg = {}
 
@@ -117,6 +106,21 @@ class ThinkingMaster(Star):
             re.compile(r"<thinking>(.*)$", re.S | re.I),
             re.compile(r"<think>(.*)$", re.S | re.I),
         ]
+
+        logger.info(f"[ThinkingMaster] 插件初始化完成 | enable_inject={self.enable_inject} | mode={self.current_mode}")
+
+    def _apply_config(self, config: dict):
+        """从 config dict 应用所有配置，供 __init__ 和 reload 复用"""
+        self.enable_inject = config.get("enable_inject", True)
+        self.max_history = config.get("max_history", 20)
+
+        native = config.get("native_block_prompt", "").strip()
+        self.native_block_prompt = native or DEFAULT_NATIVE_BLOCK
+
+        online = config.get("online_prompt", "").strip()
+        offline = config.get("offline_prompt", "").strip()
+        self.online_prompt = online or DEFAULT_COT_PROMPT
+        self.offline_prompt = offline or DEFAULT_OFFLINE_PROMPT
 
     def _load_mode(self, default):
         try:
@@ -179,14 +183,20 @@ class ThinkingMaster(Star):
     @filter.on_llm_request()
     async def inject_cot(self, event: AstrMessageEvent, req: ProviderRequest):
         if not self.enable_inject:
+            logger.debug("[ThinkingMaster] enable_inject=False，跳过注入")
             return
+
         sid = event.unified_msg_origin or "default"
         self._last_user_msg[sid] = (event.message_str or "")[:100]
+
         existing = (req.system_prompt or "").strip()
         active = self._get_active_prompt()
-        req.system_prompt = (
-            existing + "\n\n" + self.native_block_prompt + "\n\n" + active
-        ).strip()
+
+        # ★ FIX: COT prompt 注入到最前面，模型遵从率更高
+        injected = (self.native_block_prompt + "\n\n" + active + "\n\n" + existing).strip()
+        req.system_prompt = injected
+
+        logger.info(f"[ThinkingMaster] ✅ 注入成功 | sid={sid} | mode={self.current_mode} | prompt长度={len(injected)}")
 
     @filter.on_llm_response()
     async def strip_cot(self, event: AstrMessageEvent, resp):
@@ -206,6 +216,9 @@ class ThinkingMaster(Star):
             all_thinking.append(f"[原生thinking]\n{reasoning}")
         all_thinking.extend(thinking_texts)
 
+        if not thinking_texts and not reasoning:
+            logger.warning(f"[ThinkingMaster] ⚠️ 未检测到 <thinking> 标签，模型可能未遵循注入指令 | sid={sid}")
+
         # 未闭合时不替换正文，避免空回
         if not has_unclosed:
             resp.completion_text = text
@@ -221,8 +234,54 @@ class ThinkingMaster(Star):
             self.history.append(entry)
             self.history = self.history[-self.max_history:]
             self._save_history()
-            logger.info(f"[思考已记录][{self.current_mode}] {entry['time']} unclosed={has_unclosed}")
+            logger.info(f"[ThinkingMaster] 📝 思考已记录 | mode={self.current_mode} | {entry['time']} | unclosed={has_unclosed}")
 
+    # ─── 新增：/reload 强制重载 ─────────────────────────────────────────────
+    @filter.command("reload")
+    async def cmd_reload(self, event: AstrMessageEvent):
+        """强制重新加载插件配置和持久化状态"""
+        try:
+            # 1. 尝试从 context 获取最新配置（AstrBot 标准接口）
+            fresh_config = None
+            try:
+                fresh_config = self.context.get_config()
+            except Exception:
+                pass
+
+            # 2. 无论是否拿到新配置，都重置为当前 config（确保 enable_inject=True）
+            self._apply_config(fresh_config if isinstance(fresh_config, dict) else self._raw_config)
+
+            # 3. 重新从磁盘加载持久化状态
+            self.history = self._load_history()
+            self.current_mode = self._load_mode(self._raw_config.get("default_mode", "online"))
+            self._last_user_msg = {}
+
+            logger.info(f"[ThinkingMaster] 🔄 手动 reload 完成 | enable_inject={self.enable_inject} | mode={self.current_mode}")
+            yield event.plain_result(
+                f"🔄 ThinkingMaster 已重载\n"
+                f"├ enable_inject: {self.enable_inject}\n"
+                f"├ 当前模式: {self.current_mode}\n"
+                f"├ 历史记录: {len(self.history)} 条\n"
+                f"└ native_block: {'自定义' if self.native_block_prompt != DEFAULT_NATIVE_BLOCK else '默认'}"
+            )
+        except Exception as e:
+            logger.error(f"[ThinkingMaster] reload 失败: {e}")
+            yield event.plain_result(f"❌ reload 失败: {e}")
+
+    # ─── 新增：/tm状态 快速诊断 ────────────────────────────────────────────
+    @filter.command("tm状态")
+    async def cmd_debug(self, event: AstrMessageEvent):
+        prompt_preview = self._get_active_prompt()[:80].replace("\n", " ")
+        yield event.plain_result(
+            f"🔍 ThinkingMaster 状态\n"
+            f"├ enable_inject: {self.enable_inject}\n"
+            f"├ 当前模式: {self.current_mode}\n"
+            f"├ 历史记录: {len(self.history)} 条\n"
+            f"├ Prompt预览: {prompt_preview}...\n"
+            f"└ 提示：发送 /reload 可强制重载"
+        )
+
+    # ─── 原有命令 ──────────────────────────────────────────────────────────
     @filter.command("线下模式")
     async def cmd_offline(self, event: AstrMessageEvent):
         self.current_mode = "offline"
