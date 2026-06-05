@@ -195,6 +195,7 @@ class ThinkingMaster(Star):
         # ★ FIX: COT prompt 注入到最前面，模型遵从率更高
         injected = (self.native_block_prompt + "\n\n" + active + "\n\n" + existing).strip()
         req.system_prompt = injected
+        logger.debug(f"[ThinkingMaster] 完整system prompt:\n{req.system_prompt}")
 
         if getattr(req, "prompt", None):
             req.prompt += "\n[格式强制：先写...，再写正文，不可省略]"
