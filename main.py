@@ -113,7 +113,7 @@ COT_REMINDER = "\n\n[格式强制：必须先写完整的<thinking>...</thinking
     "astrbot_plugin_thinking_master",
     "张安若",
     "思维链注入+原生CoT屏蔽+双模式",
-    "0.7.6-agent-filter"
+    "0.7.7-command-skip"
 )
 class ThinkingMaster(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -190,6 +190,21 @@ class ThinkingMaster(Star):
 
     def _sid(self, event: AstrMessageEvent):
         return event.unified_msg_origin or "default"
+
+    def _is_self_command_event(self, event: AstrMessageEvent) -> bool:
+        """插件自己的管理/查看命令不要走发送前清洗。
+        否则 /最近思考 输出的本来就是 thinking 记录，会被兜底过滤器当泄露拦掉。
+        """
+        msg = (getattr(event, "message_str", "") or "").strip()
+        if not msg:
+            return False
+        normalized = msg.lstrip("/!！.。\\").strip()
+        first = normalized.split()[0] if normalized.split() else normalized
+        commands = {
+            "tm状态", "reload", "线上模式", "线下模式", "当前模式",
+            "最近思考", "查看最近思考", "思考列表", "清空思考",
+        }
+        return normalized in commands or first in commands
 
     def _looks_like_leaked_reasoning(self, text: str) -> bool:
         """标签外泄露兜底：只检查开头，避免误伤正常正文。"""
@@ -425,6 +440,10 @@ class ThinkingMaster(Star):
     async def final_scrub_before_send(self, event: AstrMessageEvent):
         """发送前最后一道保险。特别处理流式/分段发送：一旦看到 <thinking>，后续分段继续吞到 </thinking>。"""
         try:
+            if self._is_self_command_event(event):
+                logger.debug("[ThinkingMaster] 跳过插件命令输出清洗")
+                return
+
             sid = self._sid(event)
             result = event.get_result()
             chain = getattr(result, "chain", None)
@@ -503,7 +522,7 @@ class ThinkingMaster(Star):
                 f"├ enable_inject: {self.enable_inject}\n"
                 f"├ 当前模式: {self.current_mode}\n"
                 f"├ 历史记录: {len(self.history)} 条\n"
-                f"├ 版本: 0.7.6-agent-filter\n"
+                f"├ 版本: 0.7.7-command-skip\n"
                 f"└ native_block: {'自定义' if self.native_block_prompt != DEFAULT_NATIVE_BLOCK else '默认'}"
             )
         except Exception as e:
@@ -520,7 +539,7 @@ class ThinkingMaster(Star):
             f"├ enable_inject: {self.enable_inject}\n"
             f"├ 当前模式: {self.current_mode}\n"
             f"├ 历史记录: {len(self.history)} 条\n"
-            f"├ 版本: 0.7.6-agent-filter\n"
+            f"├ 版本: 0.7.7-command-skip\n"
             f"├ 分段屏蔽状态: {self._thinking_open_state.get(sid, False)}\n"
             f"├ Prompt预览: {prompt_preview}...\n"
             f"└ 提示：/reload 可强制重载"
@@ -556,6 +575,11 @@ class ThinkingMaster(Star):
             f"来源: {latest.get('source','?')}\n\n{latest.get('thinking','')}"
         )
         yield event.plain_result(text[:1800])
+
+    @filter.command("查看最近思考")
+    async def cmd_recent_alias(self, event: AstrMessageEvent):
+        async for r in self.cmd_recent(event):
+            yield r
 
     @filter.command("思考列表")
     async def cmd_list(self, event: AstrMessageEvent):
