@@ -113,7 +113,7 @@ COT_REMINDER = "\n\n[格式强制：必须先写完整的<thinking>...</thinking
     "astrbot_plugin_thinking_master",
     "张安若",
     "思维链注入+原生CoT屏蔽+双模式",
-    "0.7.8-command-bypass"
+    "0.7.9-native-hidden"
 )
 class ThinkingMaster(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -142,6 +142,11 @@ class ThinkingMaster(Star):
     def _apply_config(self, config: dict):
         self.enable_inject = config.get("enable_inject", True)
         self.max_history = config.get("max_history", 20)
+
+        # 默认不把 Gemini/OpenAI 等接口返回的原生 reasoning_content 写进“最近思考”。
+        # “最近思考”应优先展示本插件注入的 <thinking>...</thinking> 步骤，
+        # 否则用户会误以为模型没有按自定义步骤思考。需要调试原生 thought 时再在配置里打开。
+        self.record_native_thinking = bool(config.get("record_native_thinking", False))
 
         native = config.get("native_block_prompt", "").strip()
         self.native_block_prompt = native or DEFAULT_NATIVE_BLOCK
@@ -392,11 +397,16 @@ class ThinkingMaster(Star):
     def _scrub_response_obj(self, event: AstrMessageEvent, resp, source: str):
         sid = self._sid(event)
         all_thinking = []
+        native_reasoning = ""
 
+        # 原生 reasoning_content 只负责清空，默认不写入“最近思考”。
+        # 这样“最近思考”显示的就是你注入的 <thinking> 步骤，而不是 Gemini 自己的原生 thought。
         if hasattr(resp, "reasoning_content") and getattr(resp, "reasoning_content", None):
             reasoning = str(getattr(resp, "reasoning_content") or "").strip()
             if reasoning:
-                all_thinking.append(f"[原生thinking]\n{reasoning}")
+                native_reasoning = reasoning
+                if self.record_native_thinking:
+                    all_thinking.append(f"[原生thinking｜仅调试]\n{reasoning}")
             try:
                 resp.reasoning_content = ""
             except Exception:
@@ -404,7 +414,17 @@ class ThinkingMaster(Star):
 
         raw_text = str(getattr(resp, "completion_text", "") or "")
         cleaned, thinking_texts, blocked = self._strip_tags(raw_text, sid=sid, stateful=False)
-        all_thinking.extend(thinking_texts)
+
+        # 只有插件注入的 <thinking>...</thinking> 才算“按你的步骤思考”。
+        # 最近思考优先记录这部分，避免被 Gemini 原生 thinking 刷屏。
+        if thinking_texts:
+            all_thinking.extend(thinking_texts)
+        elif native_reasoning and not self.record_native_thinking:
+            # 有原生 thought，但没有抓到自定义 <thinking>，给用户一个短诊断，不展示长篇原生 thought。
+            all_thinking.append(
+                "⚠️ 本轮只捕获到模型原生 thinking，未捕获到插件注入的 <thinking>步骤。\n"
+                "这通常表示模型这轮没有按自定义 <thinking>格式输出，或适配器没有把自定义步骤放进 completion_text/result_chain。"
+            )
 
         # 关键：不管有没有检测到 blocked，只要 cleaned 和 raw 不同，都强制写回。
         if blocked or cleaned != raw_text.strip():
@@ -416,7 +436,7 @@ class ThinkingMaster(Star):
         if all_thinking:
             self._record_thinking(event, all_thinking, source=source)
         else:
-            logger.warning(f"[ThinkingMaster] ⚠️ {source} 未检测到 <thinking> 标签 | sid={sid}")
+            logger.warning(f"[ThinkingMaster] ⚠️ {source} 未检测到自定义 <thinking> 标签 | sid={sid}")
 
     @filter.on_llm_request(priority=10)
     async def inject_cot(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -542,7 +562,8 @@ class ThinkingMaster(Star):
                 f"├ enable_inject: {self.enable_inject}\n"
                 f"├ 当前模式: {self.current_mode}\n"
                 f"├ 历史记录: {len(self.history)} 条\n"
-                f"├ 版本: 0.7.8-command-bypass\n"
+                f"├ 版本: 0.7.9-native-hidden\n"
+                f"├ 记录原生thinking: {self.record_native_thinking}\n"
                 f"└ native_block: {'自定义' if self.native_block_prompt != DEFAULT_NATIVE_BLOCK else '默认'}"
             )
         except Exception as e:
@@ -559,7 +580,8 @@ class ThinkingMaster(Star):
             f"├ enable_inject: {self.enable_inject}\n"
             f"├ 当前模式: {self.current_mode}\n"
             f"├ 历史记录: {len(self.history)} 条\n"
-            f"├ 版本: 0.7.8-command-bypass\n"
+            f"├ 版本: 0.7.9-native-hidden\n"
+            f"├ 记录原生thinking: {self.record_native_thinking}\n"
             f"├ 分段屏蔽状态: {self._thinking_open_state.get(sid, False)}\n"
             f"├ Prompt预览: {prompt_preview}...\n"
             f"└ 提示：/reload 可强制重载"
@@ -592,7 +614,9 @@ class ThinkingMaster(Star):
         text = (
             f"📝 [{latest.get('mode','?')}] {latest['time']}\n"
             f"触发: {latest.get('user_message','')}\n"
-            f"来源: {latest.get('source','?')}\n\n{latest.get('thinking','')}"
+            f"来源: {latest.get('source','?')}\n"
+            f"说明: 这里默认只展示插件注入的 <thinking>步骤；原生thinking默认隐藏。\n\n"
+            f"{latest.get('thinking','')}"
         )
         yield event.plain_result(text[:1800])
 
