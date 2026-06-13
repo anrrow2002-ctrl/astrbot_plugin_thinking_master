@@ -113,7 +113,7 @@ COT_REMINDER = "\n\n[格式强制：必须先写完整的<thinking>...</thinking
     "astrbot_plugin_thinking_master",
     "张安若",
     "思维链注入+原生CoT屏蔽+双模式",
-    "0.7.7-command-skip"
+    "0.7.8-command-bypass"
 )
 class ThinkingMaster(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -191,20 +191,35 @@ class ThinkingMaster(Star):
     def _sid(self, event: AstrMessageEvent):
         return event.unified_msg_origin or "default"
 
-    def _is_self_command_event(self, event: AstrMessageEvent) -> bool:
-        """插件自己的管理/查看命令不要走发送前清洗。
-        否则 /最近思考 输出的本来就是 thinking 记录，会被兜底过滤器当泄露拦掉。
+    def _is_command_event(self, event: AstrMessageEvent) -> bool:
+        """所有命令输出都不要走发送前兜底清洗。
+
+        原因：发送前清洗器是按同一个 sid 维护 <thinking> 分段状态的。
+        如果上一轮刚吞过一个未闭合/分段 thinking，紧接着用户发 /reset、/help、/tm状态
+        这类命令时，命令回执也会被当成“仍在 thinking 块内”误吞。
+
+        所以：只要本轮用户原始消息是命令，就直接跳过清洗，并顺手清空该会话的分段状态。
         """
         msg = (getattr(event, "message_str", "") or "").strip()
         if not msg:
             return False
-        normalized = msg.lstrip("/!！.。\\").strip()
+
+        # AstrBot/QQ 常见命令前缀。这里不要把普通中文句号当命令前缀，避免误伤聊天。
+        if msg.startswith(("/", "／", "!", "！")):
+            return True
+
+        normalized = msg.lstrip("/／!！\\").strip()
         first = normalized.split()[0] if normalized.split() else normalized
         commands = {
-            "tm状态", "reload", "线上模式", "线下模式", "当前模式",
+            "tm状态", "reload", "reset", "help", "plugin", "插件",
+            "线上模式", "线下模式", "当前模式",
             "最近思考", "查看最近思考", "思考列表", "清空思考",
         }
         return normalized in commands or first in commands
+
+    # 兼容旧方法名，避免后面有地方没改到。
+    def _is_self_command_event(self, event: AstrMessageEvent) -> bool:
+        return self._is_command_event(event)
 
     def _looks_like_leaked_reasoning(self, text: str) -> bool:
         """标签外泄露兜底：只检查开头，避免误伤正常正文。"""
@@ -314,13 +329,14 @@ class ThinkingMaster(Star):
         cleaned = self.native_noise_re.sub("", cleaned)
         cleaned = cleaned.strip()
 
-        # 如果当前片段没有标签，但明显是思维步骤，直接吞掉；分段模式下继续保持阻断，等闭合标签出现。
+        # 如果当前片段没有标签，但明显是思维步骤，直接吞掉。
+        # 注意：这里不要把 _thinking_open_state 置为 True。
+        # 只有真的看到 <thinking> 未闭合时才允许进入跨消息吞噬状态；
+        # 否则一个孤立的 “step 0” 会把后续 /reset、/help 等命令也全部误吞。
         if cleaned and self._looks_like_leaked_reasoning(cleaned):
             thinking_texts.append(cleaned + "  [标签外泄露]")
             cleaned = ""
             blocked = True
-            if stateful:
-                self._thinking_open_state[sid] = True
 
         return cleaned, thinking_texts, blocked
 
@@ -440,11 +456,15 @@ class ThinkingMaster(Star):
     async def final_scrub_before_send(self, event: AstrMessageEvent):
         """发送前最后一道保险。特别处理流式/分段发送：一旦看到 <thinking>，后续分段继续吞到 </thinking>。"""
         try:
-            if self._is_self_command_event(event):
-                logger.debug("[ThinkingMaster] 跳过插件命令输出清洗")
+            sid = self._sid(event)
+
+            if self._is_command_event(event):
+                # 命令回执不属于 LLM 正文，绝不能被 thinking 兜底过滤器吞掉。
+                # 同时清掉可能残留的跨分段状态，避免 /reset 之后仍然 empty=True。
+                self._thinking_open_state[sid] = False
+                logger.debug("[ThinkingMaster] 跳过命令输出清洗，并清空分段屏蔽状态")
                 return
 
-            sid = self._sid(event)
             result = event.get_result()
             chain = getattr(result, "chain", None)
             if chain is None:
@@ -522,7 +542,7 @@ class ThinkingMaster(Star):
                 f"├ enable_inject: {self.enable_inject}\n"
                 f"├ 当前模式: {self.current_mode}\n"
                 f"├ 历史记录: {len(self.history)} 条\n"
-                f"├ 版本: 0.7.7-command-skip\n"
+                f"├ 版本: 0.7.8-command-bypass\n"
                 f"└ native_block: {'自定义' if self.native_block_prompt != DEFAULT_NATIVE_BLOCK else '默认'}"
             )
         except Exception as e:
@@ -539,7 +559,7 @@ class ThinkingMaster(Star):
             f"├ enable_inject: {self.enable_inject}\n"
             f"├ 当前模式: {self.current_mode}\n"
             f"├ 历史记录: {len(self.history)} 条\n"
-            f"├ 版本: 0.7.7-command-skip\n"
+            f"├ 版本: 0.7.8-command-bypass\n"
             f"├ 分段屏蔽状态: {self._thinking_open_state.get(sid, False)}\n"
             f"├ Prompt预览: {prompt_preview}...\n"
             f"└ 提示：/reload 可强制重载"
